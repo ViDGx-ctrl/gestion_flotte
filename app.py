@@ -1,16 +1,17 @@
 from datetime import datetime
 from email.message import EmailMessage
 import smtplib
-import sqlite3
 import pandas as pd
 import streamlit as st
+from sqlalchemy import text
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(
     page_title="Suivi Flotte - Entreprise", page_icon="🚗", layout="wide"
 )
 
-DB_NAME = "fleet_data.db"
+# --- CONNEXION POSTGRESQL / SUPABASE ---
+conn = st.connection("postgresql", type="sql")
 
 # --- LISTE OFFICIELLE DES COLLABORATEURS ---
 LISTE_EQUIPE = [
@@ -34,17 +35,14 @@ CODE_SECRET = (
 )
 
 
-# --- FONCTION D'ENVOI D'E-MAIL (ROBUSTE ET ISOLÉE) ---
+# --- FONCTION D'ENVOI D'E-MAIL ---
 def envoyer_alerte_email(sujet, corps_message):
   if (
       "EMAIL_USER" not in st.secrets
       or "EMAIL_PASSWORD" not in st.secrets
       or "EMAIL_REFERENT" not in st.secrets
   ):
-    st.warning(
-        "⚠️ Clés e-mail manquantes dans secrets.toml (EMAIL_USER,"
-        " EMAIL_PASSWORD, EMAIL_REFERENT)."
-    )
+    st.warning("⚠️ Clés e-mail manquantes dans secrets.toml.")
     return
 
   smtp_server = "smtp.gmail.com"
@@ -83,63 +81,76 @@ if not st.session_state.authentifie:
   st.stop()
 
 
-# --- INITIALISATION DE LA BASE DE DONNÉES ---
+# --- INITIALISATION DE LA BASE POSTGRESQL ---
 def init_db():
-  conn = sqlite3.connect(DB_NAME)
-  cursor = conn.cursor()
+  with conn.session as session:
+    session.execute(text("""
+            CREATE TABLE IF NOT EXISTS vehicles (
+                id SERIAL PRIMARY KEY,
+                immatriculation VARCHAR(50) UNIQUE,
+                modele VARCHAR(100),
+                conducteur VARCHAR(100),
+                prochain_ct VARCHAR(50),
+                km_actuel INTEGER,
+                km_prochaine_revision INTEGER,
+                carburant_pct INTEGER,
+                statut VARCHAR(50)
+            );
+        """))
 
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS vehicles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            immatriculation TEXT UNIQUE,
-            modele TEXT,
-            conducteur TEXT,
-            prochain_ct TEXT,
-            km_actuel INTEGER,
-            km_prochaine_revision INTEGER,
-            carburant_pct INTEGER,
-            statut TEXT
+    session.execute(text("""
+            CREATE TABLE IF NOT EXISTS trajets (
+                id SERIAL PRIMARY KEY,
+                date VARCHAR(50),
+                conducteur VARCHAR(100),
+                immatriculation VARCHAR(50),
+                destination VARCHAR(255),
+                km_enregistre INTEGER,
+                carburant_pct INTEGER
+            );
+        """))
+
+    session.execute(text("""
+            CREATE TABLE IF NOT EXISTS incidents (
+                id SERIAL PRIMARY KEY,
+                date VARCHAR(50),
+                immatriculation VARCHAR(50),
+                signale_par VARCHAR(100),
+                type_probleme VARCHAR(100),
+                description TEXT,
+                statut VARCHAR(50)
+            );
+        """))
+    session.commit()
+
+  # Si la table est vide, insertion des valeurs initiales
+  count_df = conn.query("SELECT COUNT(*) as cnt FROM vehicles", ttl=0)
+  if count_df.iloc[0]["cnt"] == 0:
+    with conn.session as session:
+      initial_vehicles = [
+          ("GE-684-QE", "Renault Clio 6", "Pool", "2027-03-15", 12500, 15000, 100, "En service"),
+          ("GZ-018-XF", "Renault Captur", "Pool", "2026-10-10", 28000, 30000, 75, "En service"),
+          ("EL-485-NG", "Renault Clio 5", "Pool", "2026-09-25", 44500, 45000, 50, "En service"),
+      ]
+      for v in initial_vehicles:
+        session.execute(
+            text("""
+                INSERT INTO vehicles (immatriculation, modele, conducteur, prochain_ct, km_actuel, km_prochaine_revision, carburant_pct, statut)
+                VALUES (:immat, :modele, :conducteur, :prochain_ct, :km_actuel, :km_rev, :carbu, :statut)
+                ON CONFLICT (immatriculation) DO NOTHING;
+            """),
+            {
+                "immat": v[0],
+                "modele": v[1],
+                "conducteur": v[2],
+                "prochain_ct": v[3],
+                "km_actuel": v[4],
+                "km_rev": v[5],
+                "carbu": v[6],
+                "statut": v[7],
+            },
         )
-    """)
-
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS trajets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            conducteur TEXT,
-            immatriculation TEXT,
-            destination TEXT,
-            km_enregistre INTEGER,
-            carburant_pct INTEGER
-        )
-    """)
-
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS incidents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            immatriculation TEXT,
-            signale_par TEXT,
-            type_probleme TEXT,
-            description TEXT,
-            statut TEXT
-        )
-    """)
-
-  cursor.execute("SELECT COUNT(*) FROM vehicles")
-  if cursor.fetchone()[0] == 0:
-    initial_vehicles = [
-        ("GE-684-QE", "Renault Clio 6", "Pool", "2027-03-15", 12500, 15000, 100, "En service"),
-        ("GZ-018-XF", "Renault Captur", "Pool", "2026-10-10", 28000, 30000, 75, "En service"),
-        ("EL-485-NG", "Renault Clio 5", "Pool", "2026-09-25", 44500, 45000, 50, "En service"),
-    ]
-    cursor.executemany("""
-            INSERT INTO vehicles (immatriculation, modele, conducteur, prochain_ct, km_actuel, km_prochaine_revision, carburant_pct, statut)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, initial_vehicles)
-    conn.commit()
-
-  conn.close()
+      session.commit()
 
 
 init_db()
@@ -162,7 +173,7 @@ menu = st.sidebar.selectbox(
 )
 
 
-# --- PAGE 1 : SAISIE TRAJET & KM (ACCUEIL PRINCIPAL UX) ---
+# --- PAGE 1 : SAISIE TRAJET & KM ---
 if menu == "📝 Saisie Trajet & Km (Accueil)":
   st.title("🚗 Enregistrement de Trajet & Véhicule")
   st.write(
@@ -170,9 +181,7 @@ if menu == "📝 Saisie Trajet & Km (Accueil)":
       " et tracer le trajet."
   )
 
-  conn = sqlite3.connect(DB_NAME)
-  df_vehicles = pd.read_sql("SELECT * FROM vehicles", conn)
-  conn.close()
+  df_vehicles = conn.query("SELECT * FROM vehicles ORDER BY immatriculation", ttl=0)
 
   with st.form("trajet_form"):
     col1, col2 = st.columns(2)
@@ -214,44 +223,39 @@ if menu == "📝 Saisie Trajet & Km (Accueil)":
         st.warning("Veuillez indiquer une destination ou un motif.")
       else:
         date_jour = datetime.now().strftime("%Y-%m-%d %H:%M")
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
+        with conn.session as session:
+          session.execute(
+              text("""
                     UPDATE vehicles 
-                    SET km_actuel = ?, carburant_pct = ?, conducteur = ? 
-                    WHERE immatriculation = ?
-                """,
-            (nouveau_km, nouveau_carbu, conducteur, immat_km),
-        )
+                    SET km_actuel = :km, carburant_pct = :carbu, conducteur = :conducteur 
+                    WHERE immatriculation = :immat
+                """),
+              {
+                  "km": nouveau_km,
+                  "carbu": nouveau_carbu,
+                  "conducteur": conducteur,
+                  "immat": immat_km,
+              },
+          )
 
-        cursor.execute(
-            """
+          session.execute(
+              text("""
                     INSERT INTO trajets (date, conducteur, immatriculation, destination, km_enregistre, carburant_pct)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """,
-            (
-                date_jour,
-                conducteur,
-                immat_km,
-                destination,
-                nouveau_km,
-                nouveau_carbu,
-            ),
-        )
+                    VALUES (:date, :conducteur, :immat, :destination, :km, :carbu)
+                """),
+              {
+                  "date": date_jour,
+                  "conducteur": conducteur,
+                  "immat": immat_km,
+                  "destination": destination,
+                  "km": nouveau_km,
+                  "carbu": nouveau_carbu,
+              },
+          )
+          session.commit()
 
-        cursor.execute(
-            "SELECT km_prochaine_revision, modele FROM vehicles WHERE"
-            " immatriculation = ?",
-            (immat_km,),
-        )
-        res = cursor.fetchone()
-        conn.commit()
-        conn.close()
-
-        seuil_rev = res[0]
-        modele = res[1]
+        seuil_rev = int(current_row["km_prochaine_revision"])
+        modele = current_row["modele"]
         restant = seuil_rev - nouveau_km
 
         st.success(
@@ -271,10 +275,8 @@ if menu == "📝 Saisie Trajet & Km (Accueil)":
 elif menu == "📊 Tableau de Bord & Alertes":
   st.title("📊 Tableau de Bord - Suivi Flotte")
 
-  conn = sqlite3.connect(DB_NAME)
-  df_vehicles = pd.read_sql("SELECT * FROM vehicles", conn)
-  df_incidents = pd.read_sql("SELECT * FROM incidents WHERE statut != 'Résolu'", conn)
-  conn.close()
+  df_vehicles = conn.query("SELECT * FROM vehicles ORDER BY immatriculation", ttl=0)
+  df_incidents = conn.query("SELECT * FROM incidents WHERE statut != 'Résolu' ORDER BY id DESC", ttl=0)
 
   col1, col2, col3 = st.columns(3)
   col1.metric("Véhicules suivis", len(df_vehicles))
@@ -301,7 +303,7 @@ elif menu == "📊 Tableau de Bord & Alertes":
           "Immat": row["immatriculation"],
           "Modèle": row["modele"],
           "Alerte": "CT Proche",
-          "Détail": row["prochain_ct"],
+          "Détail": str(row["prochain_ct"]),
       })
     if km_restants <= 1000:
       status_km = "Dépassé !" if km_restants < 0 else f"Reste {km_restants} km"
@@ -332,9 +334,7 @@ elif menu == "📋 Historique des Trajets (PV / Contrôles)":
       " déplacements par conducteur."
   )
 
-  conn = sqlite3.connect(DB_NAME)
-  df_trajets = pd.read_sql("SELECT * FROM trajets ORDER BY id DESC", conn)
-  conn.close()
+  df_trajets = conn.query("SELECT * FROM trajets ORDER BY id DESC", ttl=0)
 
   if not df_trajets.empty:
     conducteur_filtre = st.selectbox(
@@ -351,11 +351,7 @@ elif menu == "📋 Historique des Trajets (PV / Contrôles)":
 # --- PAGE 4 : PARC DE VÉHICULES ---
 elif menu == "🚙 Parc de Véhicules":
   st.title("🚙 État Actuel du Parc")
-
-  conn = sqlite3.connect(DB_NAME)
-  df_vehicles = pd.read_sql("SELECT * FROM vehicles", conn)
-  conn.close()
-
+  df_vehicles = conn.query("SELECT * FROM vehicles ORDER BY immatriculation", ttl=0)
   st.dataframe(df_vehicles, use_container_width=True)
 
 
@@ -363,9 +359,7 @@ elif menu == "🚙 Parc de Véhicules":
 elif menu == "🚨 Signaler un Incident":
   st.title("🚨 Signaler un Incident")
 
-  conn = sqlite3.connect(DB_NAME)
-  df_vehicles = pd.read_sql("SELECT * FROM vehicles", conn)
-  conn.close()
+  df_vehicles = conn.query("SELECT * FROM vehicles ORDER BY immatriculation", ttl=0)
 
   if df_vehicles.empty:
     st.warning("Aucun véhicule trouvé dans la base de données.")
@@ -396,33 +390,29 @@ elif menu == "🚨 Signaler un Incident":
         else:
           try:
             date_jour = datetime.now().strftime("%Y-%m-%d %H:%M")
-            conn = sqlite3.connect(DB_NAME)
-            cursor = conn.cursor()
+            with conn.session as session:
+              session.execute(
+                  text("""
+                        INSERT INTO incidents (date, immatriculation, signale_par, type_probleme, description, statut)
+                        VALUES (:date, :immat, :signale_par, :type_probleme, :description, :statut)
+                    """),
+                  {
+                      "date": date_jour,
+                      "immat": immat,
+                      "signale_par": signale_par,
+                      "type_probleme": type_prob,
+                      "description": description,
+                      "statut": "En cours",
+                  },
+              )
+              session.execute(
+                  text("""
+                        UPDATE vehicles SET statut = :statut WHERE immatriculation = :immat
+                    """),
+                  {"statut": "En maintenance / Incident", "immat": immat},
+              )
+              session.commit()
 
-            cursor.execute(
-                """
-                            INSERT INTO incidents (date, immatriculation, signale_par, type_probleme, description, statut)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                (
-                    date_jour,
-                    immat,
-                    signale_par,
-                    type_prob,
-                    description,
-                    "En cours",
-                ),
-            )
-
-            cursor.execute(
-                """
-                            UPDATE vehicles SET statut = ? WHERE immatriculation = ?
-                        """,
-                ("En maintenance / Incident", immat),
-            )
-
-            conn.commit()
-            conn.close()
             st.success(
                 "Incident enregistré en base de données avec succès !"
             )
