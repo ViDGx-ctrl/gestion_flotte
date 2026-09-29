@@ -42,7 +42,7 @@ def envoyer_alerte_email(sujet, corps_message):
       or "EMAIL_PASSWORD" not in st.secrets
       or "EMAIL_REFERENT" not in st.secrets
   ):
-    st.warning("⚠️ Clés e-mail manquantes dans secrets.toml.")
+    st.warning("⚠️ Paramètres e-mail manquants dans les secrets.")
     return
 
   smtp_server = "smtp.gmail.com"
@@ -62,7 +62,7 @@ def envoyer_alerte_email(sujet, corps_message):
     server.login(sender_email, sender_password)
     server.send_message(msg)
 
-  st.success("E-mail réel envoyé avec succès !")
+  st.success("E-mail d'alerte envoyé avec succès !")
 
 
 # --- AUTHENTIFICATION ---
@@ -123,7 +123,6 @@ def init_db():
         """))
     session.commit()
 
-  # Si la table est vide, insertion des valeurs initiales
   count_df = conn.query("SELECT COUNT(*) as cnt FROM vehicles", ttl=0)
   if count_df.iloc[0]["cnt"] == 0:
     with conn.session as session:
@@ -155,220 +154,141 @@ def init_db():
 
 init_db()
 
-# --- INTERFACE UTILISATEUR (SIDEBAR) ---
-st.sidebar.title("🚗 Navigation")
-if st.sidebar.button("Se déconnecter"):
-  st.session_state.authentifie = False
-  st.rerun()
+# --- BARRE SUPÉRIEURE : NAVIGATION EN PLEINE PAGE ---
+col_nav, col_logout = st.columns([4, 1])
+with col_nav:
+  section_principale = st.radio(
+      "Menu de navigation",
+      ["🚗 Saisie Trajet & Incident", "⚙️ Suivi & Administration"],
+      horizontal=True,
+      label_visibility="collapsed",
+  )
+with col_logout:
+  if st.button("Déconnexion", use_container_width=True):
+    st.session_state.authentifie = False
+    st.rerun()
 
-menu = st.sidebar.selectbox(
-    "Aller vers",
-    [
-        "📝 Saisie Trajet & Km (Accueil)",
-        "📊 Tableau de Bord & Alertes",
-        "📋 Historique des Trajets (PV / Contrôles)",
-        "🚙 Parc de Véhicules",
-        "🚨 Signaler un Incident",
-    ],
-)
+st.divider()
 
-
-# --- PAGE 1 : SAISIE TRAJET & KM ---
-if menu == "📝 Saisie Trajet & Km (Accueil)":
-  st.title("🚗 Enregistrement de Trajet & Véhicule")
-  st.write(
-      "Indique ton déplacement pour mettre à jour automatiquement le compteur"
-      " et tracer le trajet."
+# ==============================================================================
+# SECTION 1 : SAISIE TRAJET & INCIDENT (USAGE QUOTIDIEN)
+# ==============================================================================
+if section_principale == "🚗 Saisie Trajet & Incident":
+  tab_trajet, tab_incident = st.tabs(
+      ["📝 Enregistrer un trajet", "🚨 Signaler un incident"]
   )
 
-  df_vehicles = conn.query("SELECT * FROM vehicles ORDER BY immatriculation", ttl=0)
-
-  with st.form("trajet_form"):
-    col1, col2 = st.columns(2)
-    with col1:
-      immat_km = st.selectbox(
-          "Véhicule", df_vehicles["immatriculation"].tolist()
-      )
-      conducteur = st.selectbox("Conducteur", LISTE_EQUIPE)
-    with col2:
-      destination = st.text_input(
-          "Destination / Motif du déplacement",
-          placeholder="Ex: Client / Chantier X",
-      )
-
-    current_row = df_vehicles.loc[df_vehicles["immatriculation"] == immat_km].iloc[0]
-    current_km = int(current_row["km_actuel"])
-    current_carbu = int(current_row["carburant_pct"])
-
-    st.divider()
-    col3, col4 = st.columns(2)
-    with col3:
-      nouveau_km = st.number_input(
-          "Nouveau kilométrage au compteur",
-          min_value=current_km,
-          value=current_km,
-          step=1,
-      )
-    with col4:
-      nouveau_carbu = st.slider(
-          "Niveau de carburant / Batterie (%)", 0, 100, current_carbu
-      )
-
-    submit_trajet = st.form_submit_button(
-        "Enregistrer le trajet et les relevés", use_container_width=True
+  # --- SOUS-ONGLET 1 : SAISIE TRAJET ---
+  with tab_trajet:
+    st.subheader("Enregistrement de déplacement")
+    df_vehicles = conn.query(
+        "SELECT * FROM vehicles ORDER BY immatriculation", ttl=0
     )
 
-    if submit_trajet:
-      if not destination:
-        st.warning("Veuillez indiquer une destination ou un motif.")
-      else:
-        date_jour = datetime.now().strftime("%Y-%m-%d %H:%M")
-        with conn.session as session:
-          session.execute(
-              text("""
+    with st.form("trajet_form"):
+      col1, col2 = st.columns(2)
+      with col1:
+        immat_km = st.selectbox(
+            "Véhicule", df_vehicles["immatriculation"].tolist()
+        )
+        conducteur = st.selectbox("Conducteur", LISTE_EQUIPE)
+      with col2:
+        destination = st.text_input(
+            "Destination / Motif du déplacement",
+            placeholder="Ex: Rendez-vous client / Chantier",
+        )
+
+      current_row = df_vehicles.loc[
+          df_vehicles["immatriculation"] == immat_km
+      ].iloc[0]
+      current_km = int(current_row["km_actuel"])
+      current_carbu = int(current_row["carburant_pct"])
+
+      st.markdown(f"**Kilométrage actuel en mémoire :** `{current_km} km`")
+
+      col3, col4 = st.columns(2)
+      with col3:
+        nouveau_km = st.number_input(
+            "Nouveau kilométrage au compteur",
+            min_value=current_km,
+            value=current_km,
+            step=1,
+        )
+      with col4:
+        nouveau_carbu = st.slider(
+            "Niveau carburant / batterie (%)", 0, 100, current_carbu
+        )
+
+      submit_trajet = st.form_submit_button(
+          "Enregistrer le trajet", use_container_width=True
+      )
+
+      if submit_trajet:
+        if not destination.strip():
+          st.warning("Veuillez indiquer une destination ou un motif.")
+        else:
+          date_jour = datetime.now().strftime("%Y-%m-%d %H:%M")
+          with conn.session as session:
+            session.execute(
+                text("""
                     UPDATE vehicles 
                     SET km_actuel = :km, carburant_pct = :carbu, conducteur = :conducteur 
                     WHERE immatriculation = :immat
                 """),
-              {
-                  "km": nouveau_km,
-                  "carbu": nouveau_carbu,
-                  "conducteur": conducteur,
-                  "immat": immat_km,
-              },
-          )
+                {
+                    "km": nouveau_km,
+                    "carbu": nouveau_carbu,
+                    "conducteur": conducteur,
+                    "immat": immat_km,
+                },
+            )
 
-          session.execute(
-              text("""
+            session.execute(
+                text("""
                     INSERT INTO trajets (date, conducteur, immatriculation, destination, km_enregistre, carburant_pct)
                     VALUES (:date, :conducteur, :immat, :destination, :km, :carbu)
                 """),
-              {
-                  "date": date_jour,
-                  "conducteur": conducteur,
-                  "immat": immat_km,
-                  "destination": destination,
-                  "km": nouveau_km,
-                  "carbu": nouveau_carbu,
-              },
+                {
+                    "date": date_jour,
+                    "conducteur": conducteur,
+                    "immat": immat_km,
+                    "destination": destination,
+                    "km": nouveau_km,
+                    "carbu": nouveau_carbu,
+                },
+            )
+            session.commit()
+
+          seuil_rev = int(current_row["km_prochaine_revision"])
+          modele = current_row["modele"]
+          restant = seuil_rev - nouveau_km
+
+          st.success(
+              f"Trajet validé pour {conducteur} ({modele} - {immat_km}) !"
           )
-          session.commit()
+          if restant <= 1000:
+            st.warning(
+                f"🚨 **Alerte Entretien :** Il reste {restant} km avant la"
+                f" révision ({seuil_rev} km)."
+            )
+          st.rerun()
 
-        seuil_rev = int(current_row["km_prochaine_revision"])
-        modele = current_row["modele"]
-        restant = seuil_rev - nouveau_km
-
-        st.success(
-            f"Trajet enregistré avec succès pour **{conducteur}** sur la"
-            f" **{modele}** ({immat_km}) !"
-        )
-
-        if restant <= 1000:
-          st.warning(
-              f"🚨 **Alerte Révision :** Il reste {restant} km avant la"
-              f" révision ({seuil_rev} km)."
-          )
-        st.rerun()
-
-
-# --- PAGE 2 : TABLEAU DE BORD & ALERTES ---
-elif menu == "📊 Tableau de Bord & Alertes":
-  st.title("📊 Tableau de Bord - Suivi Flotte")
-
-  df_vehicles = conn.query("SELECT * FROM vehicles ORDER BY immatriculation", ttl=0)
-  df_incidents = conn.query("SELECT * FROM incidents WHERE statut != 'Résolu' ORDER BY id DESC", ttl=0)
-
-  col1, col2, col3 = st.columns(3)
-  col1.metric("Véhicules suivis", len(df_vehicles))
-  col2.metric("Incidents en cours", len(df_incidents))
-
-  today = datetime.now().date()
-  alert_count = 0
-  for _, row in df_vehicles.iterrows():
-    ct_date = datetime.strptime(row["prochain_ct"], "%Y-%m-%d").date()
-    km_restants = row["km_prochaine_revision"] - row["km_actuel"]
-    if (ct_date - today).days <= 30 or km_restants <= 1000:
-      alert_count += 1
-  col3.metric("Alertes Entretien / CT", alert_count)
-
-  st.divider()
-  st.subheader("⚠️ Alertes à traiter")
-  alerts_list = []
-  for _, row in df_vehicles.iterrows():
-    ct_date = datetime.strptime(row["prochain_ct"], "%Y-%m-%d").date()
-    km_restants = row["km_prochaine_revision"] - row["km_actuel"]
-
-    if (ct_date - today).days <= 30:
-      alerts_list.append({
-          "Immat": row["immatriculation"],
-          "Modèle": row["modele"],
-          "Alerte": "CT Proche",
-          "Détail": str(row["prochain_ct"]),
-      })
-    if km_restants <= 1000:
-      status_km = "Dépassé !" if km_restants < 0 else f"Reste {km_restants} km"
-      alerts_list.append({
-          "Immat": row["immatriculation"],
-          "Modèle": row["modele"],
-          "Alerte": "Révision imminente",
-          "Détail": status_km,
-      })
-
-  if alerts_list:
-    st.dataframe(pd.DataFrame(alerts_list), use_container_width=True)
-  else:
-    st.success("Aucune alerte critique !")
-
-  st.subheader("🛠️ Incidents en cours")
-  if not df_incidents.empty:
-    st.dataframe(df_incidents, use_container_width=True)
-  else:
-    st.info("Aucun incident en cours.")
-
-
-# --- PAGE 3 : HISTORIQUE DES TRAJETS ---
-elif menu == "📋 Historique des Trajets (PV / Contrôles)":
-  st.title("📋 Historique des Trajets & Conducteurs")
-  st.write(
-      "Registre utile en cas de contrôle, d'amende (PV) ou pour auditer les"
-      " déplacements par conducteur."
-  )
-
-  df_trajets = conn.query("SELECT * FROM trajets ORDER BY id DESC", ttl=0)
-
-  if not df_trajets.empty:
-    conducteur_filtre = st.selectbox(
-        "Filtrer par conducteur", ["Tous"] + LISTE_EQUIPE
+  # --- SOUS-ONGLET 2 : SIGNALEMENT INCIDENT ---
+  with tab_incident:
+    st.subheader("Déclarer un problème ou un incident")
+    df_vehicles = conn.query(
+        "SELECT * FROM vehicles ORDER BY immatriculation", ttl=0
     )
-    if conducteur_filtre != "Tous":
-      df_trajets = df_trajets[df_trajets["conducteur"] == conducteur_filtre]
 
-    st.dataframe(df_trajets, use_container_width=True)
-  else:
-    st.info("Aucun trajet enregistré pour le moment.")
-
-
-# --- PAGE 4 : PARC DE VÉHICULES ---
-elif menu == "🚙 Parc de Véhicules":
-  st.title("🚙 État Actuel du Parc")
-  df_vehicles = conn.query("SELECT * FROM vehicles ORDER BY immatriculation", ttl=0)
-  st.dataframe(df_vehicles, use_container_width=True)
-
-
-# --- PAGE 5 : SIGNALER UN INCIDENT ---
-elif menu == "🚨 Signaler un Incident":
-  st.title("🚨 Signaler un Incident")
-
-  df_vehicles = conn.query("SELECT * FROM vehicles ORDER BY immatriculation", ttl=0)
-
-  if df_vehicles.empty:
-    st.warning("Aucun véhicule trouvé dans la base de données.")
-  else:
     with st.form("incident_form"):
       immat = st.selectbox(
-          "Véhicule concerné", df_vehicles["immatriculation"].tolist()
+          "Véhicule concerné",
+          df_vehicles["immatriculation"].tolist(),
+          key="immat_incident",
       )
-      signale_par = st.selectbox("Votre nom (Conducteur)", LISTE_EQUIPE)
+      signale_par = st.selectbox(
+          "Votre nom", LISTE_EQUIPE, key="conducteur_incident"
+      )
       type_prob = st.selectbox(
           "Type de problème",
           [
@@ -378,15 +298,15 @@ elif menu == "🚨 Signaler un Incident":
               "Propreté / Autre",
           ],
       )
-      description = st.text_area("Description précise du problème")
+      description = st.text_area("Description du problème constaté")
 
       submit_incident = st.form_submit_button(
-          "Envoyer le signalement", use_container_width=True
+          "Envoyer l'alerte incident", use_container_width=True
       )
 
       if submit_incident:
         if not description.strip():
-          st.warning("Veuillez remplir la description.")
+          st.warning("Veuillez décrire le problème.")
         else:
           try:
             date_jour = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -413,9 +333,7 @@ elif menu == "🚨 Signaler un Incident":
               )
               session.commit()
 
-            st.success(
-                "Incident enregistré en base de données avec succès !"
-            )
+            st.success("Incident enregistré en base !")
 
             try:
               envoyer_alerte_email(
@@ -424,17 +342,165 @@ elif menu == "🚨 Signaler un Incident":
                       f"Bonjour,\n\n{signale_par} vient de signaler un"
                       f" incident sur le véhicule {immat}.\n\n- Type :"
                       f" {type_prob}\n- Description : {description}\n\nLe"
-                      " véhicule est passé en statut 'En maintenance'."
+                      " véhicule a été placé sous statut 'En maintenance'."
                   ),
               )
             except Exception as mail_err:
               st.info(
-                  "Note : L'incident a bien été noté, mais l'e-mail automatique"
-                  f" n'a pas pu partir ({mail_err})."
+                  f"Note : Incident enregistré, mais notification non transmise ({mail_err})."
               )
 
+            st.rerun()
           except Exception as db_err:
-            st.error(
-                "Erreur lors de l'enregistrement dans la base de données :"
-                f" {db_err}"
-            )
+            st.error(f"Erreur d'enregistrement : {db_err}")
+
+# ==============================================================================
+# SECTION 2 : SUIVI ET ADMINISTRATION
+# ==============================================================================
+elif section_principale == "⚙️️ Suivi & Administration":
+  st.subheader("Tableau de bord et gestion de flotte")
+
+  tab_pilotage, tab_correction, tab_historique = st.tabs([
+      "📊 Synthèse & Alertes",
+      "🔧 Ajustement km & Parc",
+      "📋 Historique des trajets",
+  ])
+
+  df_vehicles = conn.query(
+      "SELECT * FROM vehicles ORDER BY immatriculation", ttl=0
+  )
+  df_incidents = conn.query(
+      "SELECT * FROM incidents WHERE statut != 'Résolu' ORDER BY id DESC", ttl=0
+  )
+
+  # --- SOUS-ONGLET 1 : SYNTHÈSE & ALERTES ---
+  with tab_pilotage:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Véhicules suivis", len(df_vehicles))
+    c2.metric("Incidents ouverts", len(df_incidents))
+
+    today = datetime.now().date()
+    alert_count = 0
+    for _, row in df_vehicles.iterrows():
+      ct_date = datetime.strptime(str(row["prochain_ct"]), "%Y-%m-%d").date()
+      km_restants = row["km_prochaine_revision"] - row["km_actuel"]
+      if (ct_date - today).days <= 30 or km_restants <= 1000:
+        alert_count += 1
+    c3.metric("Alertes Révision / CT", alert_count)
+
+    st.markdown("#### 🚨 Points d'attention")
+    alerts_list = []
+    for _, row in df_vehicles.iterrows():
+      ct_date = datetime.strptime(str(row["prochain_ct"]), "%Y-%m-%d").date()
+      km_restants = row["km_prochaine_revision"] - row["km_actuel"]
+
+      if (ct_date - today).days <= 30:
+        alerts_list.append({
+            "Immatriculation": row["immatriculation"],
+            "Modèle": row["modele"],
+            "Type d'alerte": "CT Proche",
+            "Échéance": str(row["prochain_ct"]),
+        })
+      if km_restants <= 1000:
+        detail_km = (
+            "Dépassement révision !"
+            if km_restants < 0
+            else f"Reste {km_restants} km"
+        )
+        alerts_list.append({
+            "Immatriculation": row["immatriculation"],
+            "Modèle": row["modele"],
+            "Type d'alerte": "Révision imminente",
+            "Échéance": detail_km,
+        })
+
+    if alerts_list:
+      st.dataframe(pd.DataFrame(alerts_list), use_container_width=True)
+    else:
+      st.success("Aucune alerte d'entretien critique.")
+
+    st.markdown("#### 🛠️ Incidents signalés en cours")
+    if not df_incidents.empty:
+      st.dataframe(df_incidents, use_container_width=True)
+    else:
+      st.info("Aucun incident ouvert.")
+
+  # --- SOUS-ONGLET 2 : AJUSTEMENT KILOMÉTRAGE & PARC ---
+  with tab_correction:
+    st.markdown("#### ✏️ Ajuster manuellement le kilométrage d'un véhicule")
+    st.caption(
+        "Permet de corriger une faute de frappe ou de resynchroniser le compteur"
+        " réel."
+    )
+
+    immat_select = st.selectbox(
+        "Sélectionner le véhicule à corriger",
+        df_vehicles["immatriculation"].tolist(),
+        key="select_ajust_immat",
+    )
+    selected_veh = df_vehicles.loc[
+        df_vehicles["immatriculation"] == immat_select
+    ].iloc[0]
+
+    with st.form("ajustement_km_form"):
+      col_adj1, col_adj2 = st.columns(2)
+      with col_adj1:
+        nouveau_km_reel = st.number_input(
+            "Kilométrage réel au compteur (km)",
+            value=int(selected_veh["km_actuel"]),
+            step=50,
+        )
+      with col_adj2:
+        statut_veh = st.selectbox(
+            "Statut du véhicule",
+            ["En service", "En maintenance / Incident"],
+            index=(
+                0 if selected_veh["statut"] == "En service" else 1
+            ),
+        )
+
+      submit_ajust = st.form_submit_button(
+          "Mettre à jour le compteur", use_container_width=True
+      )
+
+      if submit_ajust:
+        with conn.session as session:
+          session.execute(
+              text("""
+                    UPDATE vehicles 
+                    SET km_actuel = :km, statut = :statut 
+                    WHERE immatriculation = :immat
+                """),
+              {
+                  "km": nouveau_km_reel,
+                  "statut": statut_veh,
+                  "immat": immat_select,
+              },
+          )
+          session.commit()
+        st.success(
+            f"Compteur mis à jour : {immat_select} ajusté à {nouveau_km_reel} km"
+            " !"
+        )
+        st.rerun()
+
+    st.divider()
+    st.markdown("#### 🚙 Parc complet des véhicules")
+    st.dataframe(df_vehicles, use_container_width=True)
+
+  # --- SOUS-ONGLET 3 : HISTORIQUE DES TRAJETS ---
+  with tab_historique:
+    st.markdown("#### 📋 Registre des déplacements")
+    df_trajets = conn.query("SELECT * FROM trajets ORDER BY id DESC", ttl=0)
+
+    if not df_trajets.empty:
+      filtre_cond = st.selectbox(
+          "Filtrer par collaborateur",
+          ["Tous"] + LISTE_EQUIPE,
+          key="filtre_historique",
+      )
+      if filtre_cond != "Tous":
+        df_trajets = df_trajets[df_trajets["conducteur"] == filtre_cond]
+      st.dataframe(df_trajets, use_container_width=True)
+    else:
+      st.info("Aucun trajet enregistré dans la base.")
