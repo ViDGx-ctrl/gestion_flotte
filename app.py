@@ -4,6 +4,7 @@ import smtplib
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from sqlalchemy import text
 
 # --- CONFIGURATION DE LA PAGE ---
@@ -33,30 +34,29 @@ LISTE_EQUIPE = [
 ]
 
 # ==============================================================================
-# 1. AUTHENTIFICATION PAR PAVÉ NUMÉRIQUE (ZÉRO APPEL RÉSEAU EN AMONT)
+# 1. AUTHENTIFICATION OPTIMISÉE MOBILE (SAISIE NATIVE SANS LATENCE)
 # ==============================================================================
 if "authentifie" not in st.session_state:
   st.session_state.authentifie = False
-if "pin_saisi" not in st.session_state:
-  st.session_state.pin_saisi = ""
 
 if not st.session_state.authentifie:
+  st.markdown("### 🔒 Accès Restreint")
+  st.caption("Saisis le code PIN de l'équipe pour déverrouiller l'accès.")
+
+  # Forçage du pavé tactile numérique smartphone + style gros chiffres
   st.markdown(
       """
         <style>
-        div[data-testid="stHorizontalBlock"] {
-            display: grid !important;
-            grid-template-columns: repeat(3, 1fr) !important;
-            gap: 10px !important;
-        }
-        div[data-testid="stHorizontalBlock"] > div {
-            width: 100% !important;
-            min-width: 0 !important;
-        }
-        div[data-testid="stButton"] button {
-            width: 100% !important;
+        div[data-testid="stTextInput"] input {
+            font-size: 32px !important;
+            letter-spacing: 12px !important;
+            text-align: center !important;
             height: 65px !important;
-            font-size: 24px !important;
+            border-radius: 12px !important;
+        }
+        div.stButton > button {
+            height: 55px !important;
+            font-size: 18px !important;
             font-weight: bold !important;
             border-radius: 12px !important;
         }
@@ -65,51 +65,44 @@ if not st.session_state.authentifie:
       unsafe_allow_html=True,
   )
 
-  st.markdown("### 🔒 Accès Restreint")
-  st.caption("Code PIN de l'équipe :")
-
-  nb_chiffres = len(st.session_state.pin_saisi)
-  affichage_code = "● " * nb_chiffres if nb_chiffres > 0 else "Entrez le code"
-  st.markdown(
-      f"<div style='text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 6px; padding: 12px; background-color: #1e293b; color: #f8fafc; border-radius: 10px; margin-bottom: 15px;'>{affichage_code}</div>",
-      unsafe_allow_html=True,
+  # Script injecté pour garantir l'affichage des gros chiffres sur iOS/Android
+  components.html(
+      """
+        <script>
+        const inputs = window.parent.document.querySelectorAll('input[type="password"]');
+        inputs.forEach(input => {
+            input.setAttribute('inputmode', 'numeric');
+            input.setAttribute('pattern', '[0-9]*');
+        });
+        </script>
+    """,
+      height=0,
+      width=0,
   )
 
-  touches = [
-      ["1", "2", "3"],
-      ["4", "5", "6"],
-      ["7", "8", "9"],
-      ["⌫", "0", "OK"],
-  ]
+  with st.form("form_pin_rapide"):
+    code_saisi = st.text_input(
+        "Code PIN",
+        type="password",
+        max_chars=6,
+        placeholder="••••",
+        label_visibility="collapsed",
+    )
+    btn_valider = st.form_submit_button(
+        "Déverrouiller l'accès", use_container_width=True
+    )
 
-  for ligne in touches:
-    cols = st.columns(3)
-    for i, touche in enumerate(ligne):
-      with cols[i]:
-        if st.button(
-            touche, key=f"btn_pin_{touche}", use_container_width=True
-        ):
-          if touche == "⌫":
-            st.session_state.pin_saisi = st.session_state.pin_saisi[:-1]
-            st.rerun()
-          elif touche == "OK":
-            if st.session_state.pin_saisi == CODE_SECRET:
-              st.session_state.authentifie = True
-              st.session_state.pin_saisi = ""
-              st.rerun()
-            else:
-              st.error("Code PIN incorrect.")
-              st.session_state.pin_saisi = ""
-              st.rerun()
-          else:
-            if len(st.session_state.pin_saisi) < 8:
-              st.session_state.pin_saisi += touche
-              st.rerun()
+    if btn_valider:
+      if str(code_saisi).strip() == CODE_SECRET:
+        st.session_state.authentifie = True
+        st.rerun()
+      else:
+        st.error("Code PIN incorrect.")
 
   st.stop()
 
 # ==============================================================================
-# 2. CONNEXION BDD & LOGIQUE MÉTIER (CHARGÉ SEULEMENT APRÈS AUTHENTIFICATION)
+# 2. CONNEXION BDD & FONCTIONS (CHARGÉES UNIQUEMENT APRÈS AUTHENTIFICATION)
 # ==============================================================================
 conn = st.connection("postgresql", type="sql")
 
@@ -120,7 +113,7 @@ def envoyer_alerte_email(sujet, corps_message):
       or "EMAIL_PASSWORD" not in st.secrets
       or "EMAIL_REFERENT" not in st.secrets
   ):
-    st.warning("⚠️ Paramètres e-mail manquants dans les secrets.")
+    st.warning("⚠️️ Paramètres e-mail manquants dans les secrets.")
     return
 
   smtp_server = "smtp.gmail.com"
@@ -437,7 +430,7 @@ elif section_principale == "⚙️ Suivi & Administration":
   tab_pilotage, tab_maintenance, tab_ct, tab_correction, tab_historique = (
       st.tabs([
           "📊 Alertes & Synthèse",
-          "🛠️ Révision",
+          "🛠️️ Révision",
           "🛡️ Contrôle Technique",
           "✏️ Correction km & Statut",
           "📋 Historique trajets",
