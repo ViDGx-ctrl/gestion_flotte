@@ -1,2 +1,5 @@
-.streamlit/
-*.db
+.streamlit/secrets.toml
+fleet_data.db
+__pycache__/
+*.pyc
+.DS_Store
