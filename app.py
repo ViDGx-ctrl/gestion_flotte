@@ -66,24 +66,29 @@ def envoyer_alerte_email(sujet, corps_message):
   st.success("E-mail d'alerte envoyé avec succès !")
 
 
-# --- AUTHENTIFICATION PAR PAVÉ NUMÉRIQUE (OPTIMISÉ MOBILE) ---
+# --- AUTHENTIFICATION PAR PAVÉ NUMÉRIQUE (CSS GRID STRICT POUR MOBILE) ---
 if "authentifie" not in st.session_state:
   st.session_state.authentifie = False
 if "pin_saisi" not in st.session_state:
   st.session_state.pin_saisi = ""
 
 if not st.session_state.authentifie:
-  # Règle CSS : force 3 colonnes compactes sur mobile et agrandit les touches tactiles
   st.markdown(
       """
         <style>
-        [data-testid="column"] {
-            flex: 1 1 calc(33.333% - 0.5rem) !important;
+        div[data-testid="stHorizontalBlock"] {
+            display: grid !important;
+            grid-template-columns: repeat(3, 1fr) !important;
+            gap: 10px !important;
+        }
+        div[data-testid="stHorizontalBlock"] > div {
+            width: 100% !important;
             min-width: 0 !important;
         }
-        div.stButton > button {
-            height: 62px !important;
-            font-size: 22px !important;
+        div[data-testid="stButton"] button {
+            width: 100% !important;
+            height: 65px !important;
+            font-size: 24px !important;
             font-weight: bold !important;
             border-radius: 12px !important;
         }
