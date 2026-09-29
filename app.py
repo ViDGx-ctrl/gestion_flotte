@@ -31,7 +31,7 @@ LISTE_EQUIPE = [
 ]
 
 # --- CODE PIN D'ACCÈS ---
-CODE_SECRET = (
+CODE_SECRET = str(
     st.secrets["APP_PASSWORD"] if "APP_PASSWORD" in st.secrets else "1234"
 )
 
@@ -66,19 +66,54 @@ def envoyer_alerte_email(sujet, corps_message):
   st.success("E-mail d'alerte envoyé avec succès !")
 
 
-# --- AUTHENTIFICATION ---
+# --- AUTHENTIFICATION PAR PAVÉ NUMÉRIQUE ---
 if "authentifie" not in st.session_state:
   st.session_state.authentifie = False
+if "pin_saisi" not in st.session_state:
+  st.session_state.pin_saisi = ""
 
 if not st.session_state.authentifie:
-  st.title("🔒 Accès Restreint - Gestion de Flotte")
-  code_saisi = st.text_input("Code d'accès de l'équipe", type="password")
-  if st.button("Valider"):
-    if code_saisi == CODE_SECRET:
-      st.session_state.authentifie = True
-      st.rerun()
-    else:
-      st.error("Code incorrect.")
+  st.markdown("### 🔒 Accès Restreint")
+  st.caption("Saisis le code PIN de l'équipe pour déverrouiller l'accès.")
+
+  nb_chiffres = len(st.session_state.pin_saisi)
+  affichage_code = "● " * nb_chiffres if nb_chiffres > 0 else "Entrez votre code"
+  st.markdown(
+      f"<div style='text-align: center; font-size: 26px; font-weight: bold; letter-spacing: 6px; padding: 12px; background-color: #1e293b; color: #f8fafc; border-radius: 10px; margin-bottom: 20px;'>{affichage_code}</div>",
+      unsafe_allow_html=True,
+  )
+
+  touches = [
+      ["1", "2", "3"],
+      ["4", "5", "6"],
+      ["7", "8", "9"],
+      ["⌫", "0", "OK"],
+  ]
+
+  for ligne in touches:
+    cols = st.columns(3)
+    for i, touche in enumerate(ligne):
+      with cols[i]:
+        if st.button(
+            touche, key=f"btn_pin_{touche}", use_container_width=True
+        ):
+          if touche == "⌫":
+            st.session_state.pin_saisi = st.session_state.pin_saisi[:-1]
+            st.rerun()
+          elif touche == "OK":
+            if st.session_state.pin_saisi == CODE_SECRET:
+              st.session_state.authentifie = True
+              st.session_state.pin_saisi = ""
+              st.rerun()
+            else:
+              st.error("Code PIN incorrect.")
+              st.session_state.pin_saisi = ""
+              st.rerun()
+          else:
+            if len(st.session_state.pin_saisi) < 8:
+              st.session_state.pin_saisi += touche
+              st.rerun()
+
   st.stop()
 
 
@@ -156,17 +191,16 @@ def init_db():
 init_db()
 
 
-# --- HELPER : OPTIONS DE VÉHICULES FORMATÉES (IMMAT + MODÈLE) ---
+# --- HELPER : FORMATAGE IMMATRICULATION + MODÈLE ---
 def get_vehicule_options(df):
-  # Crée un dictionnaire { "GE-684-QE — Renault Clio 6": "GE-684-QE" }
   return {f"{r['immatriculation']} — {r['modele']}": r["immatriculation"] for _, r in df.iterrows()}
 
 
-# --- BARRE SUPÉRIEURE : NAVIGATION PLEINE PAGE ---
+# --- BARRE SUPÉRIEURE : NAVIGATION EN PLEINE PAGE ---
 col_nav, col_logout = st.columns([4, 1])
 with col_nav:
   section_principale = st.radio(
-      "Menu de navigation",
+      "Navigation",
       ["🚗 Saisie Trajet & Incident", "⚙️ Suivi & Administration"],
       horizontal=True,
       label_visibility="collapsed",
@@ -179,14 +213,14 @@ with col_logout:
 st.divider()
 
 # ==============================================================================
-# SECTION 1 : SAISIE TRAJET & INCIDENT (USAGE QUOTIDIEN TERRAIN)
+# SECTION 1 : SAISIE TRAJET & INCIDENT (USAGE TERRAIN)
 # ==============================================================================
 if section_principale == "🚗 Saisie Trajet & Incident":
   tab_trajet, tab_incident = st.tabs(
       ["📝 Enregistrer un trajet", "🚨 Signaler un incident"]
   )
 
-  # --- SOUS-ONGLET 1 : SAISIE TRAJET ---
+  # --- SOUS-ONGLET 1 : SAISIE DU TRAJET ---
   with tab_trajet:
     st.subheader("Enregistrement de déplacement")
     df_vehicles = conn.query(
@@ -440,7 +474,6 @@ elif section_principale == "⚙️ Suivi & Administration":
     st.markdown("#### 🛠️ Incidents signalés en cours")
     if not df_incidents.empty:
       for _, inc in df_incidents.iterrows():
-        # Recherche du modèle associé à l'immatriculation
         mod_trouve = df_vehicles.loc[
             df_vehicles["immatriculation"] == inc["immatriculation"]
         ]
@@ -462,7 +495,6 @@ elif section_principale == "⚙️ Suivi & Administration":
                   ),
                   {"id": inc["id"]},
               )
-              # Si plus aucun incident actif sur ce véhicule, on le repasse en service
               session.execute(
                   text("""
                                 UPDATE vehicles SET statut = 'En service' 
