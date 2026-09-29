@@ -1,6 +1,7 @@
 from datetime import datetime
 from email.message import EmailMessage
 import smtplib
+from dateutil.relativedelta import relativedelta
 import pandas as pd
 import streamlit as st
 from sqlalchemy import text
@@ -154,6 +155,13 @@ def init_db():
 
 init_db()
 
+
+# --- HELPER : OPTIONS DE VÉHICULES FORMATÉES (IMMAT + MODÈLE) ---
+def get_vehicule_options(df):
+  # Crée un dictionnaire { "GE-684-QE — Renault Clio 6": "GE-684-QE" }
+  return {f"{r['immatriculation']} — {r['modele']}": r["immatriculation"] for _, r in df.iterrows()}
+
+
 # --- BARRE SUPÉRIEURE : NAVIGATION PLEINE PAGE ---
 col_nav, col_logout = st.columns([4, 1])
 with col_nav:
@@ -184,13 +192,13 @@ if section_principale == "🚗 Saisie Trajet & Incident":
     df_vehicles = conn.query(
         "SELECT * FROM vehicles ORDER BY immatriculation", ttl=0
     )
+    veh_options = get_vehicule_options(df_vehicles)
 
     with st.form("trajet_form"):
       col1, col2 = st.columns(2)
       with col1:
-        immat_km = st.selectbox(
-            "Véhicule", df_vehicles["immatriculation"].tolist()
-        )
+        selected_label = st.selectbox("Véhicule", list(veh_options.keys()))
+        immat_km = veh_options[selected_label]
         conducteur = st.selectbox("Conducteur", LISTE_EQUIPE)
       with col2:
         destination = st.text_input(
@@ -204,7 +212,9 @@ if section_principale == "🚗 Saisie Trajet & Incident":
       current_km = int(current_row["km_actuel"])
       current_carbu = int(current_row["carburant_pct"])
 
-      st.markdown(f"**Kilométrage actuel relevé :** `{current_km} km`")
+      st.markdown(
+          f"**Compteur actuel ({current_row['modele']}) :** `{current_km} km`"
+      )
 
       col3, col4 = st.columns(2)
       with col3:
@@ -279,13 +289,17 @@ if section_principale == "🚗 Saisie Trajet & Incident":
     df_vehicles = conn.query(
         "SELECT * FROM vehicles ORDER BY immatriculation", ttl=0
     )
+    veh_options = get_vehicule_options(df_vehicles)
 
     with st.form("incident_form"):
-      immat = st.selectbox(
-          "Véhicule concerné",
-          df_vehicles["immatriculation"].tolist(),
-          key="immat_incident",
+      selected_label = st.selectbox(
+          "Véhicule concerné", list(veh_options.keys()), key="immat_incident"
       )
+      immat = veh_options[selected_label]
+      modele = df_vehicles.loc[df_vehicles["immatriculation"] == immat].iloc[0][
+          "modele"
+      ]
+
       signale_par = st.selectbox(
           "Votre nom", LISTE_EQUIPE, key="conducteur_incident"
       )
@@ -337,18 +351,18 @@ if section_principale == "🚗 Saisie Trajet & Incident":
 
             try:
               envoyer_alerte_email(
-                  sujet=f"⚠️ INCIDENT FLOTTE - {immat} ({type_prob})",
+                  sujet=f"⚠️ INCIDENT FLOTTE - {immat} ({modele}) - {type_prob}",
                   corps_message=(
                       f"Bonjour,\n\n{signale_par} vient de signaler un"
-                      f" incident sur le véhicule {immat}.\n\n- Type :"
+                      f" incident sur {modele} ({immat}).\n\n- Type :"
                       f" {type_prob}\n- Description : {description}\n\nLe"
-                      " véhicule est sous statut 'En maintenance'."
+                      " véhicule a été placé sous le statut 'En maintenance'."
                   ),
               )
             except Exception as mail_err:
               st.info(
-                  "Note : Incident enregistré, mais notification e-mail non"
-                  f" envoyée ({mail_err})."
+                  "Note : Incident enregistré, mais notification non transmise"
+                  f" ({mail_err})."
               )
 
             st.rerun()
@@ -361,12 +375,15 @@ if section_principale == "🚗 Saisie Trajet & Incident":
 elif section_principale == "⚙️ Suivi & Administration":
   st.subheader("Tableau de bord et administration")
 
-  tab_pilotage, tab_maintenance, tab_correction, tab_historique = st.tabs([
-      "📊 Alertes & Synthèse",
-      "🛠️ Révision effectuée",
-      "✏️ Correction km & Statut",
-      "📋 Historique trajets",
-  ])
+  tab_pilotage, tab_maintenance, tab_ct, tab_correction, tab_historique = (
+      st.tabs([
+          "📊 Alertes & Synthèse",
+          "🛠️ Révision",
+          "🛡️ Contrôle Technique",
+          "✏️ Correction km & Statut",
+          "📋 Historique trajets",
+      ])
+  )
 
   df_vehicles = conn.query(
       "SELECT * FROM vehicles ORDER BY immatriculation", ttl=0
@@ -374,8 +391,9 @@ elif section_principale == "⚙️ Suivi & Administration":
   df_incidents = conn.query(
       "SELECT * FROM incidents WHERE statut != 'Résolu' ORDER BY id DESC", ttl=0
   )
+  veh_options = get_vehicule_options(df_vehicles)
 
-  # --- SOUS-ONGLET 1 : SYNTHÈSE & ALERTES ---
+  # --- SOUS-ONGLET 1 : SYNTHÈSE & GESTION DES ALERTES ---
   with tab_pilotage:
     c1, c2, c3 = st.columns(3)
     c1.metric("Véhicules suivis", len(df_vehicles))
@@ -398,8 +416,7 @@ elif section_principale == "⚙️ Suivi & Administration":
 
       if (ct_date - today).days <= 30:
         alerts_list.append({
-            "Immatriculation": row["immatriculation"],
-            "Modèle": row["modele"],
+            "Véhicule": f"{row['immatriculation']} — {row['modele']}",
             "Type d'alerte": "CT Proche",
             "Échéance": str(row["prochain_ct"]),
         })
@@ -410,8 +427,7 @@ elif section_principale == "⚙️ Suivi & Administration":
             else f"Reste {km_restants} km"
         )
         alerts_list.append({
-            "Immatriculation": row["immatriculation"],
-            "Modèle": row["modele"],
+            "Véhicule": f"{row['immatriculation']} — {row['modele']}",
             "Type d'alerte": "Révision imminente",
             "Échéance": detail_km,
         })
@@ -423,11 +439,46 @@ elif section_principale == "⚙️ Suivi & Administration":
 
     st.markdown("#### 🛠️ Incidents signalés en cours")
     if not df_incidents.empty:
-      st.dataframe(df_incidents, use_container_width=True)
+      for _, inc in df_incidents.iterrows():
+        # Recherche du modèle associé à l'immatriculation
+        mod_trouve = df_vehicles.loc[
+            df_vehicles["immatriculation"] == inc["immatriculation"]
+        ]
+        nom_mod = mod_trouve.iloc[0]["modele"] if not mod_trouve.empty else ""
+
+        col_desc, col_act = st.columns([4, 1])
+        with col_desc:
+          st.warning(
+              f"**{inc['immatriculation']} — {nom_mod}** |"
+              f" {inc['type_probleme']}\n\n*Signalé par {inc['signale_par']} le"
+              f" {inc['date']}* : {inc['description']}"
+          )
+        with col_act:
+          if st.button("Marquer résolu", key=f"res_{inc['id']}"):
+            with conn.session as session:
+              session.execute(
+                  text(
+                      "UPDATE incidents SET statut = 'Résolu' WHERE id = :id"
+                  ),
+                  {"id": inc["id"]},
+              )
+              # Si plus aucun incident actif sur ce véhicule, on le repasse en service
+              session.execute(
+                  text("""
+                                UPDATE vehicles SET statut = 'En service' 
+                                WHERE immatriculation = :immat 
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM incidents WHERE immatriculation = :immat AND statut = 'En cours'
+                                )
+                            """),
+                  {"immat": inc["immatriculation"]},
+              )
+              session.commit()
+            st.rerun()
     else:
       st.info("Aucun incident ouvert.")
 
-  # --- SOUS-ONGLET 2 : VALIDER UNE RÉVISION EFFECTUÉE ---
+  # --- SOUS-ONGLET 2 : VALIDER UNE RÉVISION ---
   with tab_maintenance:
     st.markdown("#### 🛠️ Enregistrer une révision effectuée chez le garagiste")
     st.caption(
@@ -435,11 +486,10 @@ elif section_principale == "⚙️ Suivi & Administration":
         " du kilométrage réel de sortie d'atelier."
     )
 
-    immat_rev = st.selectbox(
-        "Véhicule révisé",
-        df_vehicles["immatriculation"].tolist(),
-        key="immat_rev_select",
+    selected_label = st.selectbox(
+        "Véhicule révisé", list(veh_options.keys()), key="immat_rev_select"
     )
+    immat_rev = veh_options[selected_label]
     v_rev = df_vehicles.loc[
         df_vehicles["immatriculation"] == immat_rev
     ].iloc[0]
@@ -451,7 +501,10 @@ elif section_principale == "⚙️ Suivi & Administration":
           step=100,
       )
       prochaine_cible = km_facture + 20000
-      st.info(f"👉 Prochain palier calculé : **{prochaine_cible} km** (+20 000 km)")
+      st.info(
+          f"👉 Prochaine échéance calculée pour {v_rev['modele']} :"
+          f" **{prochaine_cible} km** (+20 000 km)"
+      )
 
       submit_rev = st.form_submit_button(
           "Valider la révision et réinitialiser l'alerte",
@@ -470,21 +523,72 @@ elif section_principale == "⚙️ Suivi & Administration":
           )
           session.commit()
         st.success(
-            f"Révision enregistrée pour {immat_rev} ! Prochaine échéance fixée à"
+            f"Révision validée pour {selected_label} ! Prochaine alerte à"
             f" {prochaine_cible} km."
         )
         st.rerun()
 
-  # --- SOUS-ONGLET 3 : CORRECTION COMPTEUR & STATUT ---
+  # --- SOUS-ONGLET 3 : VALIDER UN CONTRÔLE TECHNIQUE (CT) ---
+  with tab_ct:
+    st.markdown("#### 🛡️ Enregistrer un Contrôle Technique (CT)")
+    st.caption(
+        "Repousse automatiquement l'échéance du prochain CT de +2 ans à partir"
+        " de la date du passage."
+    )
+
+    selected_label_ct = st.selectbox(
+        "Véhicule ayant passé le CT",
+        list(veh_options.keys()),
+        key="immat_ct_select",
+    )
+    immat_ct = veh_options[selected_label_ct]
+    v_ct = df_vehicles.loc[df_vehicles["immatriculation"] == immat_ct].iloc[0]
+
+    with st.form("form_ct_done"):
+      date_ct = st.date_input(
+          "Date du passage au CT", value=datetime.now().date()
+      )
+      prochaine_date_ct = date_ct + relativedelta(years=2)
+      st.info(
+          f"👉 Prochain CT pour {v_ct['modele']} calculé au :"
+          f" **{prochaine_date_ct.strftime('%d/%m/%Y')}** (+2 ans)"
+      )
+
+      submit_ct = st.form_submit_button(
+          "Valider le CT et mettre à jour la date", use_container_width=True
+      )
+
+      if submit_ct:
+        with conn.session as session:
+          session.execute(
+              text("""
+                    UPDATE vehicles 
+                    SET prochain_ct = :date_ct 
+                    WHERE immatriculation = :immat
+                """),
+              {
+                  "date_ct": prochaine_date_ct.strftime("%Y-%m-%d"),
+                  "immat": immat_ct,
+              },
+          )
+          session.commit()
+        st.success(
+            f"Contrôle technique mis à jour pour {selected_label_ct} ! Prochaine"
+            f" échéance : {prochaine_date_ct.strftime('%d/%m/%Y')}."
+        )
+        st.rerun()
+
+  # --- SOUS-ONGLET 4 : CORRECTION COMPTEUR & STATUT ---
   with tab_correction:
     st.markdown("#### ✏️ Corriger manuellement le compteur")
-    st.caption("Utile en cas d'erreur de frappe ou d'oubli d'un collaborateur.")
+    st.caption("Utile en cas d'erreur de saisie d'un collaborateur.")
 
-    immat_select = st.selectbox(
+    selected_label_corr = st.selectbox(
         "Sélectionner le véhicule",
-        df_vehicles["immatriculation"].tolist(),
+        list(veh_options.keys()),
         key="select_ajust_immat",
     )
+    immat_select = veh_options[selected_label_corr]
     selected_veh = df_vehicles.loc[
         df_vehicles["immatriculation"] == immat_select
     ].iloc[0]
@@ -523,14 +627,14 @@ elif section_principale == "⚙️ Suivi & Administration":
               },
           )
           session.commit()
-        st.success(f"{immat_select} mis à jour à {nouveau_km_reel} km !")
+        st.success(f"{selected_label_corr} mis à jour à {nouveau_km_reel} km !")
         st.rerun()
 
     st.divider()
     st.markdown("#### 🚙 Parc complet")
     st.dataframe(df_vehicles, use_container_width=True)
 
-  # --- SOUS-ONGLET 4 : HISTORIQUE DES TRAJETS ---
+  # --- SOUS-ONGLET 5 : HISTORIQUE DES TRAJETS ---
   with tab_historique:
     st.markdown("#### 📋 Registre des déplacements")
     df_trajets = conn.query("SELECT * FROM trajets ORDER BY id DESC", ttl=0)
