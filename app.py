@@ -11,8 +11,10 @@ st.set_page_config(
     page_title="Suivi Flotte - Entreprise", page_icon="🚗", layout="wide"
 )
 
-# --- CONNEXION POSTGRESQL / SUPABASE ---
-conn = st.connection("postgresql", type="sql")
+# --- CODE PIN D'ACCÈS ---
+CODE_SECRET = str(
+    st.secrets["APP_PASSWORD"] if "APP_PASSWORD" in st.secrets else "1234"
+)
 
 # --- LISTE OFFICIELLE DES COLLABORATEURS ---
 LISTE_EQUIPE = [
@@ -30,43 +32,9 @@ LISTE_EQUIPE = [
     "Chloé",
 ]
 
-# --- CODE PIN D'ACCÈS ---
-CODE_SECRET = str(
-    st.secrets["APP_PASSWORD"] if "APP_PASSWORD" in st.secrets else "1234"
-)
-
-
-# --- FONCTION D'ENVOI D'E-MAIL ---
-def envoyer_alerte_email(sujet, corps_message):
-  if (
-      "EMAIL_USER" not in st.secrets
-      or "EMAIL_PASSWORD" not in st.secrets
-      or "EMAIL_REFERENT" not in st.secrets
-  ):
-    st.warning("⚠️ Paramètres e-mail manquants dans les secrets.")
-    return
-
-  smtp_server = "smtp.gmail.com"
-  port = 465
-
-  sender_email = st.secrets["EMAIL_USER"]
-  sender_password = st.secrets["EMAIL_PASSWORD"]
-  destinataire = st.secrets["EMAIL_REFERENT"]
-
-  msg = EmailMessage()
-  msg.set_content(corps_message)
-  msg["Subject"] = sujet
-  msg["From"] = sender_email
-  msg["To"] = destinataire
-
-  with smtplib.SMTP_SSL(smtp_server, port, timeout=5) as server:
-    server.login(sender_email, sender_password)
-    server.send_message(msg)
-
-  st.success("E-mail d'alerte envoyé avec succès !")
-
-
-# --- AUTHENTIFICATION PAR PAVÉ NUMÉRIQUE (CSS GRID STRICT POUR MOBILE) ---
+# ==============================================================================
+# 1. AUTHENTIFICATION PAR PAVÉ NUMÉRIQUE (ZÉRO APPEL RÉSEAU EN AMONT)
+# ==============================================================================
 if "authentifie" not in st.session_state:
   st.session_state.authentifie = False
 if "pin_saisi" not in st.session_state:
@@ -140,8 +108,42 @@ if not st.session_state.authentifie:
 
   st.stop()
 
+# ==============================================================================
+# 2. CONNEXION BDD & LOGIQUE MÉTIER (CHARGÉ SEULEMENT APRÈS AUTHENTIFICATION)
+# ==============================================================================
+conn = st.connection("postgresql", type="sql")
 
-# --- INITIALISATION DE LA BASE POSTGRESQL ---
+
+def envoyer_alerte_email(sujet, corps_message):
+  if (
+      "EMAIL_USER" not in st.secrets
+      or "EMAIL_PASSWORD" not in st.secrets
+      or "EMAIL_REFERENT" not in st.secrets
+  ):
+    st.warning("⚠️ Paramètres e-mail manquants dans les secrets.")
+    return
+
+  smtp_server = "smtp.gmail.com"
+  port = 465
+
+  sender_email = st.secrets["EMAIL_USER"]
+  sender_password = st.secrets["EMAIL_PASSWORD"]
+  destinataire = st.secrets["EMAIL_REFERENT"]
+
+  msg = EmailMessage()
+  msg.set_content(corps_message)
+  msg["Subject"] = sujet
+  msg["From"] = sender_email
+  msg["To"] = destinataire
+
+  with smtplib.SMTP_SSL(smtp_server, port, timeout=5) as server:
+    server.login(sender_email, sender_password)
+    server.send_message(msg)
+
+  st.success("E-mail d'alerte envoyé avec succès !")
+
+
+@st.cache_resource
 def init_db():
   with conn.session as session:
     session.execute(text("""
@@ -215,7 +217,6 @@ def init_db():
 init_db()
 
 
-# --- HELPER : FORMATAGE IMMATRICULATION + MODÈLE ---
 def get_vehicule_options(df):
   return {f"{r['immatriculation']} — {r['modele']}": r["immatriculation"] for _, r in df.iterrows()}
 
@@ -248,7 +249,7 @@ if section_principale == "🚗 Saisie Trajet & Incident":
   with tab_trajet:
     st.subheader("Enregistrement de déplacement")
     df_vehicles = conn.query(
-        "SELECT * FROM vehicles ORDER BY immatriculation", ttl=0
+        "SELECT * FROM vehicles ORDER BY immatriculation", ttl=15
     )
     veh_options = get_vehicule_options(df_vehicles)
 
@@ -345,7 +346,7 @@ if section_principale == "🚗 Saisie Trajet & Incident":
   with tab_incident:
     st.subheader("Déclarer un problème ou un incident")
     df_vehicles = conn.query(
-        "SELECT * FROM vehicles ORDER BY immatriculation", ttl=0
+        "SELECT * FROM vehicles ORDER BY immatriculation", ttl=15
     )
     veh_options = get_vehicule_options(df_vehicles)
 
@@ -444,10 +445,10 @@ elif section_principale == "⚙️ Suivi & Administration":
   )
 
   df_vehicles = conn.query(
-      "SELECT * FROM vehicles ORDER BY immatriculation", ttl=0
+      "SELECT * FROM vehicles ORDER BY immatriculation", ttl=15
   )
   df_incidents = conn.query(
-      "SELECT * FROM incidents WHERE statut != 'Résolu' ORDER BY id DESC", ttl=0
+      "SELECT * FROM incidents WHERE statut != 'Résolu' ORDER BY id DESC", ttl=15
   )
   veh_options = get_vehicule_options(df_vehicles)
 
@@ -693,7 +694,7 @@ elif section_principale == "⚙️ Suivi & Administration":
   # --- SOUS-ONGLET 5 : HISTORIQUE DES TRAJETS ---
   with tab_historique:
     st.markdown("#### 📋 Registre des déplacements")
-    df_trajets = conn.query("SELECT * FROM trajets ORDER BY id DESC", ttl=0)
+    df_trajets = conn.query("SELECT * FROM trajets ORDER BY id DESC", ttl=15)
 
     if not df_trajets.empty:
       filtre_cond = st.selectbox(
