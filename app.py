@@ -19,6 +19,7 @@ CODE_SECRET = str(
 
 # --- LISTE OFFICIELLE DES COLLABORATEURS ---
 LISTE_EQUIPE = [
+    "Vincent",
     "Nathalie",
     "Amélie",
     "Sophie",
@@ -31,7 +32,6 @@ LISTE_EQUIPE = [
     "Stéphane",
     "Pauline",
     "Chloé",
-    "Vincent",
 ]
 
 # ==============================================================================
@@ -147,6 +147,7 @@ def init_db():
                 prochain_ct VARCHAR(50),
                 km_actuel INTEGER,
                 km_prochaine_revision INTEGER,
+                date_prochaine_revision VARCHAR(50),
                 carburant_pct INTEGER,
                 statut VARCHAR(50)
             );
@@ -226,7 +227,6 @@ if section_principale == "🚗 Saisie Trajet & Incident":
     else:
       veh_options = get_vehicule_options(df_vehicles)
 
-      # 1. Choix du véhicule HORS du formulaire pour actualiser immédiatement le compteur
       selected_label = st.selectbox(
           "Véhicule", list(veh_options.keys()), key="select_trajet_vehicule"
       )
@@ -238,7 +238,6 @@ if section_principale == "🚗 Saisie Trajet & Incident":
       current_km = int(current_row["km_actuel"])
       current_carbu = int(current_row["carburant_pct"])
 
-      # 2. Formulaire de saisie pour le reste des informations
       with st.form("trajet_form"):
         col1, col2 = st.columns(2)
         with col1:
@@ -255,7 +254,6 @@ if section_principale == "🚗 Saisie Trajet & Incident":
 
         col3, col4 = st.columns(2)
         with col3:
-          # Clé dynamique liée à l'immatriculation pour forcer la mise à jour de la valeur
           nouveau_km = st.number_input(
               "Nouveau kilométrage au compteur",
               min_value=current_km,
@@ -443,7 +441,7 @@ elif section_principale == "⚙️ Suivi & Administration":
   )
   veh_options = get_vehicule_options(df_vehicles)
 
-  # --- SOUS-ONGLET 1 : SYNTHÈSE & GESTION DES ALERTES ---
+  # --- SOUS-ONGLET 1 : SYNTHÈSE & GESTION DES ALERTES (KM + 1 AN + CT) ---
   with tab_pilotage:
     c1, c2, c3 = st.columns(3)
     c1.metric("Véhicules suivis", len(df_vehicles))
@@ -453,9 +451,21 @@ elif section_principale == "⚙️ Suivi & Administration":
     alert_count = 0
     if not df_vehicles.empty:
       for _, row in df_vehicles.iterrows():
+        # Calcul CT
         ct_date = datetime.strptime(str(row["prochain_ct"]), "%Y-%m-%d").date()
+        ct_alerte = (ct_date - today).days <= 30
+
+        # Calcul Révision (Km OU Date 1 an)
         km_restants = row["km_prochaine_revision"] - row["km_actuel"]
-        if (ct_date - today).days <= 30 or km_restants <= 1000:
+        km_alerte = km_restants <= 1000
+
+        date_rev_str = row.get("date_prochaine_revision")
+        date_rev_alerte = False
+        if date_rev_str and pd.notna(date_rev_str):
+          rev_date = datetime.strptime(str(date_rev_str), "%Y-%m-%d").date()
+          date_rev_alerte = (rev_date - today).days <= 30
+
+        if ct_alerte or km_alerte or date_rev_alerte:
           alert_count += 1
     c3.metric("Alertes Révision / CT", alert_count)
 
@@ -471,42 +481,73 @@ elif section_principale == "⚙️ Suivi & Administration":
         ct_date = datetime.strptime(str(row["prochain_ct"]), "%Y-%m-%d").date()
         km_restants = km_rev - km_actuel
 
-        # Alerte Révision
-        if km_restants <= 1000:
+        # Vérification échéance 1 an
+        date_rev_str = row.get("date_prochaine_revision")
+        rev_date = None
+        date_rev_alerte = False
+        jours_rev_restants = 999
+        if date_rev_str and pd.notna(date_rev_str):
+          rev_date = datetime.strptime(str(date_rev_str), "%Y-%m-%d").date()
+          jours_rev_restants = (rev_date - today).days
+          date_rev_alerte = jours_rev_restants <= 30
+
+        # 1. Alerte Révision (Seuil Km OU Échéance 1 an atteinte)
+        if km_restants <= 1000 or date_rev_alerte:
           alertes_trouvees = True
+          raisons = []
+          if km_restants <= 1000:
+            raisons.append(
+                f"Kilométrage atteint ({km_actuel} km / seuil {km_rev} km)"
+            )
+          if date_rev_alerte and rev_date:
+            detail_delai = (
+                f"dépassée de {abs(jours_rev_restants)} jour(s)"
+                if jours_rev_restants < 0
+                else f"échéance dans {jours_rev_restants} jour(s)"
+            )
+            raisons.append(
+                f"Échéance 1 an ({rev_date.strftime('%d/%m/%Y')} -"
+                f" {detail_delai})"
+            )
+
           col_info, col_btn = st.columns([3, 2])
           with col_info:
-            detail = (
-                f"Dépassée de {abs(km_restants)} km !"
-                if km_restants < 0
-                else f"Reste {km_restants} km"
-            )
+            motif_txt = " • ".join(raisons)
             st.error(
-                f"🔧 **{immat} — {modele}** | **Révision imminente**\n\nCompteur"
-                f" : {km_actuel} km / Seuil : {km_rev} km ({detail})"
+                f"🔧 **{immat} — {modele}** | **Révision à prévoir**\n\nMotif :"
+                f" {motif_txt}"
             )
           with col_btn:
-            nouvelle_cible = km_actuel + 20000
+            nouvelle_cible_km = km_actuel + 20000
+            nouvelle_date_rev = today + relativedelta(years=1)
             if st.button(
-                "Marquer faite (+20 000 km)", key=f"btn_done_rev_{immat}"
+                "Marquer faite (+20 000 km & +1 an)",
+                key=f"btn_done_rev_{immat}",
             ):
               with conn.session as session:
                 session.execute(
                     text("""
                                   UPDATE vehicles 
-                                  SET km_prochaine_revision = :cible, statut = 'En service' 
+                                  SET km_prochaine_revision = :cible_km, 
+                                      date_prochaine_revision = :cible_date,
+                                      statut = 'En service' 
                                   WHERE immatriculation = :immat
                               """),
-                    {"cible": nouvelle_cible, "immat": immat},
+                    {
+                        "cible_km": nouvelle_cible_km,
+                        "cible_date": nouvelle_date_rev.strftime("%Y-%m-%d"),
+                        "immat": immat,
+                    },
                 )
                 session.commit()
               st.success(
-                  f"Révision validée pour {immat} (prochaine à"
-                  f" {nouvelle_cible} km) !"
+                  f"Révision validée pour {immat} ! Prochaine révision à"
+                  f" {nouvelle_cible_km} km ou le"
+                  f" {nouvelle_date_rev.strftime('%d/%m/%Y')}."
               )
               st.rerun()
 
-        # Alerte Contrôle Technique
+        # 2. Alerte Contrôle Technique
         if (ct_date - today).days <= 30:
           alertes_trouvees = True
           col_info, col_btn = st.columns([3, 2])
@@ -589,6 +630,10 @@ elif section_principale == "⚙️ Suivi & Administration":
   # --- SOUS-ONGLET 2 : VALIDER UNE RÉVISION DÉTAILLÉE ---
   with tab_maintenance:
     st.markdown("#### 🛠️ Enregistrer une révision effectuée chez le garagiste")
+    st.caption(
+        "Renseigne le kilométrage réel de la facture et la date pour repousser"
+        " automatiquement l'échéance de +20 000 km et de +1 an."
+    )
     if df_vehicles.empty:
       st.info("Aucun véhicule dans la base.")
     else:
@@ -601,21 +646,32 @@ elif section_principale == "⚙️ Suivi & Administration":
       ].iloc[0]
 
       with st.form("form_revision_done"):
-        km_facture = st.number_input(
-            "Kilométrage exact lors de la révision (km)",
-            value=int(v_rev["km_actuel"]),
-            step=100,
-            key=f"facture_km_{immat_rev}",
-        )
-        prochaine_cible = km_facture + 20000
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+          km_facture = st.number_input(
+              "Kilométrage lors de la révision (km)",
+              value=int(v_rev["km_actuel"]),
+              step=100,
+              key=f"facture_km_{immat_rev}",
+          )
+        with col_m2:
+          date_facture = st.date_input(
+              "Date de la révision",
+              value=datetime.now().date(),
+              key=f"date_rev_{immat_rev}",
+          )
+
+        prochaine_cible_km = km_facture + 20000
+        prochaine_date_rev = date_facture + relativedelta(years=1)
+
         st.info(
-            f"👉 Prochaine échéance calculée pour {v_rev['modele']} :"
-            f" **{prochaine_cible} km** (+20 000 km)"
+            f"👉 Prochaines échéances calculées pour {v_rev['modele']} :"
+            f" **{prochaine_cible_km} km** (+20 000 km) ou"
+            f" **{prochaine_date_rev.strftime('%d/%m/%Y')}** (+1 an)"
         )
 
         submit_rev = st.form_submit_button(
-            "Valider la révision et réinitialiser l'alerte",
-            use_container_width=True,
+            "Valider la révision", use_container_width=True
         )
 
         if submit_rev:
@@ -623,21 +679,34 @@ elif section_principale == "⚙️ Suivi & Administration":
             session.execute(
                 text("""
                       UPDATE vehicles 
-                      SET km_prochaine_revision = :cible, km_actuel = :km, statut = 'En service' 
+                      SET km_prochaine_revision = :cible_km, 
+                          date_prochaine_revision = :cible_date,
+                          km_actuel = :km, 
+                          statut = 'En service' 
                       WHERE immatriculation = :immat
                   """),
-                {"cible": prochaine_cible, "km": km_facture, "immat": immat_rev},
+                {
+                    "cible_km": prochaine_cible_km,
+                    "cible_date": prochaine_date_rev.strftime("%Y-%m-%d"),
+                    "km": km_facture,
+                    "immat": immat_rev,
+                },
             )
             session.commit()
           st.success(
-              f"Révision validée pour {selected_label} ! Prochaine alerte à"
-              f" {prochaine_cible} km."
+              f"Révision validée pour {selected_label} ! Prochaine échéance :"
+              f" {prochaine_cible_km} km ou"
+              f" {prochaine_date_rev.strftime('%d/%m/%Y')}."
           )
           st.rerun()
 
   # --- SOUS-ONGLET 3 : VALIDER UN CONTRÔLE TECHNIQUE DÉTAILLÉ ---
   with tab_ct:
     st.markdown("#### 🛡️ Enregistrer un Contrôle Technique (CT)")
+    st.caption(
+        "Permet d'ajuster la date précise du passage (+2 ans pour le prochain"
+        " contrôle)."
+    )
     if df_vehicles.empty:
       st.info("Aucun véhicule dans la base.")
     else:
@@ -687,11 +756,10 @@ elif section_principale == "⚙️ Suivi & Administration":
 
   # --- SOUS-ONGLET 4 : CORRECTION COMPTEUR & STATUT ---
   with tab_correction:
-    st.markdown("#### ✏️ Corriger manuellement le compteur")
+    st.markdown("#### ✏️ Corriger manuellement le compteur et les échéances")
     if df_vehicles.empty:
       st.info("Aucun véhicule dans la base.")
     else:
-      # Sélecteur de véhicule HORS du formulaire pour rafraîchir les champs immédiatement
       selected_label_corr = st.selectbox(
           "Sélectionner le véhicule",
           list(veh_options.keys()),
