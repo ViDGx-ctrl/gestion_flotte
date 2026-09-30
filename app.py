@@ -220,10 +220,7 @@ if section_principale == "🚗 Saisie Trajet & Incident":
     )
 
     if df_vehicles.empty:
-      st.warning(
-          "⚠️ Aucun véhicule enregistré dans la base. Veuillez d'abord en"
-          " ajouter dans l'administration."
-      )
+      st.warning("⚠️ Aucun véhicule enregistré dans la base.")
     else:
       veh_options = get_vehicule_options(df_vehicles)
 
@@ -417,19 +414,13 @@ if section_principale == "🚗 Saisie Trajet & Incident":
               st.error(f"Erreur d'enregistrement : {db_err}")
 
 # ==============================================================================
-# SECTION 2 : SUIVI ET ADMINISTRATION
+# SECTION 2 : SUIVI ET ADMINISTRATION (REGROUPEMENT ERGONOMIQUE)
 # ==============================================================================
 elif section_principale == "⚙️ Suivi & Administration":
-  st.subheader("Tableau de bord et administration")
+  st.subheader("Administration & Pilotage de la flotte")
 
-  tab_pilotage, tab_maintenance, tab_ct, tab_correction, tab_historique = (
-      st.tabs([
-          "📊 Alertes & Synthèse",
-          "🛠️ Révision",
-          "🛡️ Contrôle Technique",
-          "✏️ Correction km & Statut",
-          "📋 Historique trajets",
-      ])
+  tab_gestion, tab_historique = st.tabs(
+      ["🚗 Gestion & Entretien du Parc", "📋 Historique des trajets"]
   )
 
   df_vehicles = conn.query(
@@ -440,22 +431,22 @@ elif section_principale == "⚙️ Suivi & Administration":
       ttl=5,
   )
   veh_options = get_vehicule_options(df_vehicles)
+  today = datetime.now().date()
 
-  # --- SOUS-ONGLET 1 : SYNTHÈSE & GESTION DES ALERTES (KM + 1 AN + CT) ---
-  with tab_pilotage:
+  # --------------------------------------------------------------------------
+  # ONGLET 1 : GESTION DU PARC (SYNTHÈSE + ALERTES + ACTIONS SUR LE VÉHICULE)
+  # --------------------------------------------------------------------------
+  with tab_gestion:
+    # 1. Chiffres clés
     c1, c2, c3 = st.columns(3)
     c1.metric("Véhicules suivis", len(df_vehicles))
     c2.metric("Incidents en cours", len(df_incidents))
 
-    today = datetime.now().date()
     alert_count = 0
     if not df_vehicles.empty:
       for _, row in df_vehicles.iterrows():
-        # Calcul CT
         ct_date = datetime.strptime(str(row["prochain_ct"]), "%Y-%m-%d").date()
         ct_alerte = (ct_date - today).days <= 30
-
-        # Calcul Révision (Km OU Date 1 an)
         km_restants = row["km_prochaine_revision"] - row["km_actuel"]
         km_alerte = km_restants <= 1000
 
@@ -469,7 +460,8 @@ elif section_principale == "⚙️ Suivi & Administration":
           alert_count += 1
     c3.metric("Alertes Révision / CT", alert_count)
 
-    st.markdown("#### 🚨 Échéances à surveiller (À traiter)")
+    # 2. Alertes immédiates avec validation rapide
+    st.markdown("#### 🚨 Échéances à traiter en priorité")
     alertes_trouvees = False
 
     if not df_vehicles.empty:
@@ -481,7 +473,6 @@ elif section_principale == "⚙️ Suivi & Administration":
         ct_date = datetime.strptime(str(row["prochain_ct"]), "%Y-%m-%d").date()
         km_restants = km_rev - km_actuel
 
-        # Vérification échéance 1 an
         date_rev_str = row.get("date_prochaine_revision")
         rev_date = None
         date_rev_alerte = False
@@ -491,7 +482,7 @@ elif section_principale == "⚙️ Suivi & Administration":
           jours_rev_restants = (rev_date - today).days
           date_rev_alerte = jours_rev_restants <= 30
 
-        # 1. Alerte Révision (Seuil Km OU Échéance 1 an atteinte)
+        # Alerte Révision (km OU 1 an)
         if km_restants <= 1000 or date_rev_alerte:
           alertes_trouvees = True
           raisons = []
@@ -503,7 +494,7 @@ elif section_principale == "⚙️ Suivi & Administration":
             detail_delai = (
                 f"dépassée de {abs(jours_rev_restants)} jour(s)"
                 if jours_rev_restants < 0
-                else f"échéance dans {jours_rev_restants} jour(s)"
+                else f"dans {jours_rev_restants} jour(s)"
             )
             raisons.append(
                 f"Échéance 1 an ({rev_date.strftime('%d/%m/%Y')} -"
@@ -514,8 +505,7 @@ elif section_principale == "⚙️ Suivi & Administration":
           with col_info:
             motif_txt = " • ".join(raisons)
             st.error(
-                f"🔧 **{immat} — {modele}** | **Révision à prévoir**\n\nMotif :"
-                f" {motif_txt}"
+                f"🔧 **{immat} — {modele}** | **Révision requise**\n\n{motif_txt}"
             )
           with col_btn:
             nouvelle_cible_km = km_actuel + 20000
@@ -540,14 +530,10 @@ elif section_principale == "⚙️ Suivi & Administration":
                     },
                 )
                 session.commit()
-              st.success(
-                  f"Révision validée pour {immat} ! Prochaine révision à"
-                  f" {nouvelle_cible_km} km ou le"
-                  f" {nouvelle_date_rev.strftime('%d/%m/%Y')}."
-              )
+              st.success(f"Révision validée pour {immat} !")
               st.rerun()
 
-        # 2. Alerte Contrôle Technique
+        # Alerte Contrôle Technique
         if (ct_date - today).days <= 30:
           alertes_trouvees = True
           col_info, col_btn = st.columns([3, 2])
@@ -579,16 +565,14 @@ elif section_principale == "⚙️ Suivi & Administration":
                     },
                 )
                 session.commit()
-              st.success(
-                  f"CT validé pour {immat} (prochain au"
-                  f" {nouveau_ct.strftime('%d/%m/%Y')}) !"
-              )
+              st.success(f"CT validé pour {immat} (+2 ans) !")
               st.rerun()
 
     if not alertes_trouvees:
-      st.success("Aucune échéance d'entretien ou de CT à traiter !")
+      st.success("✅ Aucune échéance critique d'entretien ou de CT à traiter.")
 
-    st.markdown("#### 🛠️ Incidents signalés en cours")
+    # 3. Incidents signalés
+    st.markdown("#### 🛠️ Incidents signalés")
     if not df_incidents.empty:
       for _, inc in df_incidents.iterrows():
         mod_trouve = df_vehicles.loc[
@@ -627,195 +611,160 @@ elif section_principale == "⚙️ Suivi & Administration":
     else:
       st.info("Aucun incident ouvert.")
 
-  # --- SOUS-ONGLET 2 : VALIDER UNE RÉVISION DÉTAILLÉE ---
-  with tab_maintenance:
-    st.markdown("#### 🛠️ Enregistrer une révision effectuée chez le garagiste")
-    st.caption(
-        "Renseigne le kilométrage réel de la facture et la date pour repousser"
-        " automatiquement l'échéance de +20 000 km et de +1 an."
-    )
-    if df_vehicles.empty:
-      st.info("Aucun véhicule dans la base.")
-    else:
-      selected_label = st.selectbox(
-          "Véhicule révisé", list(veh_options.keys()), key="immat_rev_select"
-      )
-      immat_rev = veh_options[selected_label]
-      v_rev = df_vehicles.loc[
-          df_vehicles["immatriculation"] == immat_rev
-      ].iloc[0]
+    st.divider()
 
-      with st.form("form_revision_done"):
-        col_m1, col_m2 = st.columns(2)
-        with col_m1:
-          km_facture = st.number_input(
-              "Kilométrage lors de la révision (km)",
-              value=int(v_rev["km_actuel"]),
-              step=100,
-              key=f"facture_km_{immat_rev}",
-          )
-        with col_m2:
-          date_facture = st.date_input(
-              "Date de la révision",
-              value=datetime.now().date(),
-              key=f"date_rev_{immat_rev}",
-          )
-
-        prochaine_cible_km = km_facture + 20000
-        prochaine_date_rev = date_facture + relativedelta(years=1)
-
-        st.info(
-            f"👉 Prochaines échéances calculées pour {v_rev['modele']} :"
-            f" **{prochaine_cible_km} km** (+20 000 km) ou"
-            f" **{prochaine_date_rev.strftime('%d/%m/%Y')}** (+1 an)"
-        )
-
-        submit_rev = st.form_submit_button(
-            "Valider la révision", use_container_width=True
-        )
-
-        if submit_rev:
-          with conn.session as session:
-            session.execute(
-                text("""
-                      UPDATE vehicles 
-                      SET km_prochaine_revision = :cible_km, 
-                          date_prochaine_revision = :cible_date,
-                          km_actuel = :km, 
-                          statut = 'En service' 
-                      WHERE immatriculation = :immat
-                  """),
-                {
-                    "cible_km": prochaine_cible_km,
-                    "cible_date": prochaine_date_rev.strftime("%Y-%m-%d"),
-                    "km": km_facture,
-                    "immat": immat_rev,
-                },
-            )
-            session.commit()
-          st.success(
-              f"Révision validée pour {selected_label} ! Prochaine échéance :"
-              f" {prochaine_cible_km} km ou"
-              f" {prochaine_date_rev.strftime('%d/%m/%Y')}."
-          )
-          st.rerun()
-
-  # --- SOUS-ONGLET 3 : VALIDER UN CONTRÔLE TECHNIQUE DÉTAILLÉ ---
-  with tab_ct:
-    st.markdown("#### 🛡️ Enregistrer un Contrôle Technique (CT)")
-    st.caption(
-        "Permet d'ajuster la date précise du passage (+2 ans pour le prochain"
-        " contrôle)."
-    )
-    if df_vehicles.empty:
-      st.info("Aucun véhicule dans la base.")
-    else:
-      selected_label_ct = st.selectbox(
-          "Véhicule ayant passé le CT",
+    # 4. Fiche d'actions par véhicule (Entretien détaillé & Corrections)
+    st.markdown("#### ⚙️ Actions & Mise à jour d'un véhicule")
+    if not df_vehicles.empty:
+      selected_label_admin = st.selectbox(
+          "Sélectionner le véhicule à mettre à jour",
           list(veh_options.keys()),
-          key="immat_ct_select",
+          key="select_admin_vehicule",
       )
-      immat_ct = veh_options[selected_label_ct]
-      v_ct = df_vehicles.loc[
-          df_vehicles["immatriculation"] == immat_ct
+      immat_admin = veh_options[selected_label_admin]
+      veh_admin = df_vehicles.loc[
+          df_vehicles["immatriculation"] == immat_admin
       ].iloc[0]
 
-      with st.form("form_ct_done"):
-        date_ct = st.date_input(
-            "Date du passage au CT", value=datetime.now().date()
-        )
-        prochaine_date_ct = date_ct + relativedelta(years=2)
-        st.info(
-            f"👉 Prochain CT pour {v_ct['modele']} calculé au :"
-            f" **{prochaine_date_ct.strftime('%d/%m/%Y')}** (+2 ans)"
-        )
+      exp_rev, exp_ct, exp_corr = st.tabs([
+          "🛠️ Révision d'atelier",
+          "🛡️ Contrôle Technique",
+          "✏️️ Correction km & Statut",
+      ])
 
-        submit_ct = st.form_submit_button(
-            "Valider le CT et mettre à jour la date", use_container_width=True
-        )
-
-        if submit_ct:
-          with conn.session as session:
-            session.execute(
-                text("""
-                      UPDATE vehicles 
-                      SET prochain_ct = :date_ct 
-                      WHERE immatriculation = :immat
-                  """),
-                {
-                    "date_ct": prochaine_date_ct.strftime("%Y-%m-%d"),
-                    "immat": immat_ct,
-                },
+      # Sous-onglet A : Révision avec détails facture
+      with exp_rev:
+        st.caption("Enregistrer le kilométrage et la date réels de la facture.")
+        with st.form("form_revision_admin"):
+          col_r1, col_r2 = st.columns(2)
+          with col_r1:
+            km_facture = st.number_input(
+                "Kilométrage de la révision (km)",
+                value=int(veh_admin["km_actuel"]),
+                step=100,
+                key=f"fac_km_{immat_admin}",
             )
-            session.commit()
-          st.success(
-              f"Contrôle technique mis à jour pour {selected_label_ct} !"
-              f" Prochaine échéance : {prochaine_date_ct.strftime('%d/%m/%Y')}."
-          )
-          st.rerun()
-
-  # --- SOUS-ONGLET 4 : CORRECTION COMPTEUR & STATUT ---
-  with tab_correction:
-    st.markdown("#### ✏️ Corriger manuellement le compteur et les échéances")
-    if df_vehicles.empty:
-      st.info("Aucun véhicule dans la base.")
-    else:
-      selected_label_corr = st.selectbox(
-          "Sélectionner le véhicule",
-          list(veh_options.keys()),
-          key="select_ajust_immat",
-      )
-      immat_select = veh_options[selected_label_corr]
-      selected_veh = df_vehicles.loc[
-          df_vehicles["immatriculation"] == immat_select
-      ].iloc[0]
-
-      with st.form("ajustement_km_form"):
-        col_adj1, col_adj2 = st.columns(2)
-        with col_adj1:
-          nouveau_km_reel = st.number_input(
-              "Kilométrage réel (km)",
-              value=int(selected_veh["km_actuel"]),
-              step=50,
-              key=f"corr_km_{immat_select}",
-          )
-        with col_adj2:
-          statut_veh = st.selectbox(
-              "Statut du véhicule",
-              ["En service", "En maintenance / Incident"],
-              index=(0 if selected_veh["statut"] == "En service" else 1),
-              key=f"corr_statut_{immat_select}",
-          )
-
-        submit_ajust = st.form_submit_button(
-            "Mettre à jour", use_container_width=True
-        )
-
-        if submit_ajust:
-          with conn.session as session:
-            session.execute(
-                text("""
-                      UPDATE vehicles 
-                      SET km_actuel = :km, statut = :statut 
-                      WHERE immatriculation = :immat
-                  """),
-                {
-                    "km": nouveau_km_reel,
-                    "statut": statut_veh,
-                    "immat": immat_select,
-                },
+          with col_r2:
+            date_facture = st.date_input(
+                "Date de la révision",
+                value=today,
+                key=f"fac_date_{immat_admin}",
             )
-            session.commit()
-          st.success(
-              f"{selected_label_corr} mis à jour à {nouveau_km_reel} km !"
+
+          cible_km = km_facture + 20000
+          cible_date = date_facture + relativedelta(years=1)
+          st.info(
+              f"👉 Prochain seuil calculé : **{cible_km} km** ou"
+              f" **{cible_date.strftime('%d/%m/%Y')}** (+1 an)"
           )
-          st.rerun()
 
-      st.divider()
-      st.markdown("#### 🚙 Parc complet")
-      st.dataframe(df_vehicles, use_container_width=True)
+          if st.form_submit_button(
+              "Valider la révision", use_container_width=True
+          ):
+            with conn.session as session:
+              session.execute(
+                  text("""
+                                UPDATE vehicles 
+                                SET km_prochaine_revision = :cible_km, 
+                                    date_prochaine_revision = :cible_date,
+                                    km_actuel = :km, 
+                                    statut = 'En service' 
+                                WHERE immatriculation = :immat
+                            """),
+                  {
+                      "cible_km": cible_km,
+                      "cible_date": cible_date.strftime("%Y-%m-%d"),
+                      "km": km_facture,
+                      "immat": immat_admin,
+                  },
+              )
+              session.commit()
+            st.success(f"Révision enregistrée pour {selected_label_admin} !")
+            st.rerun()
 
-  # --- SOUS-ONGLET 5 : HISTORIQUE DES TRAJETS ---
+      # Sous-onglet B : CT avec date personnalisée
+      with exp_ct:
+        st.caption("Mettre à jour la date précise du passage au CT (+2 ans).")
+        with st.form("form_ct_admin"):
+          date_ct = st.date_input(
+              "Date effective du contrôle",
+              value=today,
+              key=f"ct_date_{immat_admin}",
+          )
+          cible_ct = date_ct + relativedelta(years=2)
+          st.info(
+              f"👉 Prochain CT calculé au :"
+              f" **{cible_ct.strftime('%d/%m/%Y')}** (+2 ans)"
+          )
+
+          if st.form_submit_button(
+              "Valider le passage au CT", use_container_width=True
+          ):
+            with conn.session as session:
+              session.execute(
+                  text("""
+                                UPDATE vehicles 
+                                SET prochain_ct = :date_ct 
+                                WHERE immatriculation = :immat
+                            """),
+                  {
+                      "date_ct": cible_ct.strftime("%Y-%m-%d"),
+                      "immat": immat_admin,
+                  },
+              )
+              session.commit()
+            st.success(f"Contrôle technique mis à jour pour {immat_admin} !")
+            st.rerun()
+
+      # Sous-onglet C : Correction manuelle du compteur et statut
+      with exp_corr:
+        st.caption(
+            "Corriger une erreur de saisie ou ajuster le statut opérationnel."
+        )
+        with st.form("form_corr_admin"):
+          col_c1, col_c2 = st.columns(2)
+          with col_c1:
+            km_corr = st.number_input(
+                "Kilométrage réel au compteur (km)",
+                value=int(veh_admin["km_actuel"]),
+                step=50,
+                key=f"corr_km_{immat_admin}",
+            )
+          with col_c2:
+            statut_corr = st.selectbox(
+                "Statut actuel",
+                ["En service", "En maintenance / Incident"],
+                index=(0 if veh_admin["statut"] == "En service" else 1),
+                key=f"corr_statut_{immat_admin}",
+            )
+
+          if st.form_submit_button(
+              "Enregistrer les modifications", use_container_width=True
+          ):
+            with conn.session as session:
+              session.execute(
+                  text("""
+                                UPDATE vehicles 
+                                SET km_actuel = :km, statut = :statut 
+                                WHERE immatriculation = :immat
+                            """),
+                  {
+                      "km": km_corr,
+                      "statut": statut_corr,
+                      "immat": immat_admin,
+                  },
+              )
+              session.commit()
+            st.success(f"Données mises à jour pour {immat_admin} !")
+            st.rerun()
+
+    st.divider()
+    st.markdown("#### 🚙 Parc complet en base")
+    st.dataframe(df_vehicles, use_container_width=True)
+
+  # --------------------------------------------------------------------------
+  # ONGLET 2 : HISTORIQUE COMPLET DES DÉPLACEMENTS
+  # --------------------------------------------------------------------------
   with tab_historique:
     st.markdown("#### 📋 Registre des déplacements")
     df_trajets = conn.query("SELECT * FROM trajets ORDER BY id DESC", ttl=5)
